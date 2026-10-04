@@ -241,7 +241,7 @@ class RenderingTest(unittest.TestCase):
 class ConfigTest(unittest.TestCase):
     def test_defaults(self):
         cfg = c.Config.from_env({"SHELL": "/bin/zsh"})
-        self.assertEqual(cfg.model, "gpt-6.1-sol")
+        self.assertEqual(cfg.model, "gpt-6-luna")
         self.assertEqual(cfg.shell, "/bin/zsh")
         self.assertIsNone(cfg.target)
         self.assertTrue(cfg.state_dir.endswith("wezterm-commander"))
@@ -410,7 +410,7 @@ class ChatCompletionTest(unittest.TestCase):
     def test_default_model_gets_low_effort_others_get_none(self):
         server = FakeServer()
         try:
-            for model, expected in ((c.DEFAULT_MODEL, "low"), ("llama3", None)):
+            for model, expected in ((c.DEFAULT_MODEL, "none"), ("llama3", None)):
                 cfg = c.Config(base_url=server.url, api_key="k", model=model, cwd="/")
                 c.chat_completion(cfg, creds_for(cfg), [])
                 self.assertEqual(server.requests[-1]["body"].get("reasoning_effort"), expected)
@@ -435,7 +435,7 @@ class ChatCompletionTest(unittest.TestCase):
         cases = [
             (401, "API key was rejected"),
             (429, "Rate limited"),
-            (404, "Model 'gpt-6.1-sol' not found"),
+            (404, "Model 'gpt-6-luna' not found"),
             (500, "HTTP 500: boom model"),
         ]
         for status, expected in cases:
@@ -496,6 +496,8 @@ class CredentialsTest(unittest.TestCase):
 
     def test_key_command(self):
         self.assertEqual(creds_for(c.Config(api_key_command="echo from-cmd")).api_key, "from-cmd")
+        empty = creds_for(c.Config(api_key_command="true"))
+        self.assertIn("printed nothing", empty.error)
         creds = creds_for(c.Config(api_key_command="echo nope >&2; exit 3"))
         self.assertIsNone(creds.api_key)
         self.assertIn("nope", creds.error)
@@ -528,6 +530,9 @@ class FakeTerminal:
     def width(self):
         return 80
 
+    def height(self):
+        return 24
+
     def read(self, decoder, timeout):
         if timeout is not None and timeout < 0.1:  # the spinner polling while a reply is pending
             time.sleep(0.005)
@@ -552,6 +557,18 @@ def typeahead_reader(term, typed):
         return original(decoder, timeout)
 
     return read
+
+
+class KeyBarTest(unittest.TestCase):
+    def test_chips_fit_and_wrap(self):
+        items = c.KEYBARS["suggestion"]
+        wide = c.keybar_lines(items, 120)
+        self.assertEqual(len(wide), 1)
+        narrow = c.keybar_lines(items, 40)
+        self.assertGreater(len(narrow), 1)
+        for line in narrow:
+            self.assertLess(c.text_width(plain(line)), 40)
+        self.assertEqual(plain(wide[0]).split("   ")[0], "  Enter  Use this command")
 
 
 class DrawerTest(unittest.TestCase):
@@ -650,6 +667,16 @@ class DrawerTest(unittest.TestCase):
         drawer, term = self.drawer([b"loop\r"], ['{"command": "for f in *; do\\n  echo $f\\ndone"}'])
         drawer.run()
         self.assertIn("multi-line", plain(term.text))
+
+    def test_key_bar_spells_out_keys_for_each_situation(self):
+        drawer, term = self.drawer([b"list\r", b"more", b"\x15", b"\x1b"], ['{"command": "ls"}'])
+        drawer.run()
+        text = plain(term.text)
+        for label in ("Ask", "Past questions", "Use this command", "Try another way", "New chat", "Send", "Cancel"):
+            self.assertIn(label, text)
+        self.assertNotIn("^R", text)
+        self.assertIn("\x1b[1;21r", term.text)  # 24 rows: chat in 1-21, spacer, 2-row key bar
+        self.assertIn("Not quite right? Type what to change", text)
 
     def test_up_arrow_recalls_previous_question(self):
         drawer, _ = self.drawer([b"list\r", b"\x1b[A"], ['{"command": "ls"}'])

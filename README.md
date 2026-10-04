@@ -5,12 +5,16 @@ Press a key in WezTerm, say what you want in plain English, get a shell command 
 <!-- demo.gif goes here -->
 
 ```
+  commander  gpt-6-luna · ~/code/app
+
 ❯ find files bigger than 100mb, only show size and path
   $ find . -type f -size +100M -exec ls -lh {} + | awk '{print $5, $9}'
     -exec ... {} + batches files into a single ls call.
     awk '{print $5, $9}' keeps just the size and path columns.
 
-❯ ↵ insert · type to refine · ^R another · ^L new chat · esc hide
+❯ Not quite right? Type what to change
+
+ [Enter] Use this command   [Ctrl+R] Try another way   [Ctrl+L] New chat   [Esc] Hide
 ```
 
 It opens as a drawer at the bottom of the tab, so the pane you were working in stays where it was. Nothing gets typed into it until you accept a command, and accepting doesn't run it. You still press Enter yourself.
@@ -43,17 +47,18 @@ In your terminal:
 | --- | --- |
 | `Cmd+I` / `Ctrl+Shift+I` | Open the drawer. Press again inside it to hide it. |
 
-In the drawer:
+In the drawer you don't need to remember any of this. A bar along the bottom always shows the keys that work right now, with what each one does.
 
 | Key | What it does |
 | --- | --- |
-| type, then `Enter` | Ask. Once there's a suggestion, whatever you type is feedback on it ("only .js files", "use rg instead"). |
-| `Enter` on an empty line | Insert the suggested command into your pane and jump back to it. |
-| `Ctrl+R` | Ask for a different command. |
+| Type, then `Enter` | Ask. Once there's a suggestion, whatever you type is feedback on it ("only .js files", "use rg instead"). |
+| `Enter` with nothing typed | Use the suggested command: it's pasted into your pane and you jump back there. |
+| `Ctrl+R` | Try another way: ask for a different command. |
 | `Ctrl+L` | Start a new chat. |
-| `Esc` | Hide the drawer. If a request is in flight, `Esc` cancels it instead. |
-| `Up` / `Down` | Scroll through questions you asked before. |
-| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+B`, `Alt+F` | The usual line editing. |
+| `Esc` | Hide the drawer. While waiting for an answer, `Esc` cancels instead. |
+| `Ctrl+C` | Clear what you've typed. |
+| `Up` / `Down` | Bring back questions you asked before. |
+| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+B`, `Alt+F` | The usual line editing, for people who like it. |
 
 Each pane has its own chat. Hide the drawer, do something else, press the key again, and the conversation is still there. Chats untouched for a day start fresh.
 
@@ -87,12 +92,12 @@ commander.apply_to_config(config, {
   key = "i",                     -- set to false to bind it yourself (see below)
   mods = "CMD",                  -- "CTRL|SHIFT" on Linux
 
-  model = "gpt-6.1-sol",
+  model = "gpt-6-luna",
   base_url = nil,                -- nil uses $OPENAI_BASE_URL, then https://api.openai.com/v1
   api_key_env = nil,             -- nil means OPENAI_API_KEY (see "The API key")
   api_key_command = nil,
   api_key = nil,
-  reasoning_effort = nil,        -- nil: "low" for gpt-6.1-sol, not sent for other models
+  reasoning_effort = nil,        -- nil: "none" for gpt-6-luna (fastest), not sent for other models
   timeout = 60,                  -- seconds; raise it for slow local models
 
   height = 0.4,                  -- drawer height as a fraction of the tab
@@ -115,7 +120,7 @@ commander.apply_to_config(config, { base_url = "http://localhost:1234/v1", model
 -- OpenRouter
 commander.apply_to_config(config, {
   base_url = "https://openrouter.ai/api/v1",
-  model = "openai/gpt-6.1-sol",     -- any model id OpenRouter lists
+  model = "openai/gpt-6-luna",     -- any model id OpenRouter lists
   api_key_env = "OPENROUTER_API_KEY",
 })
 ```

@@ -10,7 +10,8 @@
 -- target always comes from that record, never from the event.
 --
 -- The drawer always closes by exiting its own process. To close it from here we
--- send it QUIT_SEQUENCE, a private escape sequence it treats as "exit now".
+-- send it QUIT_SEQUENCE, a private escape sequence it treats as "exit now". After
+-- an event it waits for that sequence, so the event is never lost to a fast exit.
 
 local wezterm = require("wezterm")
 
@@ -26,12 +27,12 @@ M.defaults = {
 	mods = is_mac and "CMD" or "CTRL|SHIFT",
 
 	-- Any OpenAI-compatible chat completions endpoint works.
-	model = "gpt-6.1-sol",
+	model = "gpt-6-luna",
 	base_url = nil, -- nil: $OPENAI_BASE_URL, else https://api.openai.com/v1
 	api_key_env = nil, -- nil: OPENAI_API_KEY, but only sent to OpenAI or $OPENAI_BASE_URL
 	api_key_command = nil, -- e.g. "op read op://Private/OpenAI/credential"
 	api_key = nil, -- discouraged; prefer api_key_env or api_key_command
-	reasoning_effort = nil, -- nil: "low" for the default model, unset for others
+	reasoning_effort = nil, -- nil: "none" for the default model, unset for others
 	timeout = 60,
 
 	-- Drawer height as a fraction of the tab.
@@ -121,14 +122,17 @@ local function drawers()
 	return wezterm.GLOBAL.commander_drawers
 end
 
--- The pane id this pane is a drawer for, or nil if we did not spawn it. Pane ids
--- start over when the mux server restarts, so also check the pane runs Python.
+-- The pane id this pane is a drawer for, or nil if we did not spawn it.
 local function drawer_target(pane)
-	local target = drawers()[tostring(pane:pane_id())]
-	if not target then
-		return nil
-	end
-	local process = pane:get_foreground_process_name()
+	return drawers()[tostring(pane:pane_id())]
+end
+
+-- Like drawer_target, for the hotkey. Pane ids start over when the mux server
+-- restarts, so a stale record could name an ordinary shell; check it runs Python.
+-- (Events skip this check: the drawer has usually exited by the time they arrive.)
+local function live_drawer_target(pane)
+	local target = drawer_target(pane)
+	local process = target and pane:get_foreground_process_name()
 	if process and not process:lower():find("python") then
 		return nil
 	end
@@ -141,7 +145,7 @@ end
 
 local function find_drawer(tab)
 	for _, pane in ipairs(tab:panes()) do
-		local target = drawer_target(pane)
+		local target = live_drawer_target(pane)
 		if target then
 			return pane, target
 		end
@@ -212,7 +216,7 @@ end
 --   no drawer                 -> open one
 function M.toggle(window, pane, opts)
 	opts = opts or M.options or merge()
-	local target = drawer_target(pane)
+	local target = live_drawer_target(pane)
 	if target then
 		local original = get_pane(target)
 		if original then
@@ -261,6 +265,7 @@ local function on_event(window, pane, value)
 	if target then
 		target:activate()
 	end
+	pane:send_text(QUIT_SEQUENCE) -- the drawer waits for this before it exits
 end
 
 local handler_registered = false

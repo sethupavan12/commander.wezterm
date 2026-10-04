@@ -44,8 +44,8 @@ except ImportError:  # Windows
     termios = None
 
 VERSION = "0.1.0"
-DEFAULT_MODEL = "gpt-6.1-sol"
-DEFAULT_EFFORT = "low"  # about twice as fast as the default for this model, same quality for one-liners
+DEFAULT_MODEL = "gpt-6-luna"
+DEFAULT_EFFORT = "none"  # ~1.4s instead of ~2.5s per answer, same quality for one-liners
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_KEY_ENV = "OPENAI_API_KEY"
 EVENT_VAR = "wezterm_commander_event"
@@ -208,7 +208,10 @@ class Credentials:
         if out.returncode != 0:
             self.error = "api_key_command failed: " + (out.stderr.strip() or f"exit {out.returncode}")
             return None
-        return out.stdout.strip() or None
+        key = out.stdout.strip()
+        if not key:
+            self.error = "api_key_command ran but printed nothing, so there is no API key to use."
+        return key or None
 
 
 def login_shell_env(names: List[str], environ=os.environ, timeout: float = 6.0) -> dict:
@@ -859,6 +862,41 @@ def fit_path(path: str, room: int) -> str:
 
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+REVERSE = "\x1b[7m"
+
+# The key bar pinned to the bottom of the drawer, one set of keys per situation.
+KEYBARS = {
+    "start": [("Enter", "Ask"), ("↑ ↓", "Past questions"), ("Esc", "Hide")],
+    "chat": [("Enter", "Ask"), ("↑ ↓", "Past questions"), ("Ctrl+L", "New chat"), ("Esc", "Hide")],
+    "suggestion": [
+        ("Enter", "Use this command"),
+        ("Ctrl+R", "Try another way"),
+        ("Ctrl+L", "New chat"),
+        ("Esc", "Hide"),
+    ],
+    "typing": [("Enter", "Send"), ("Ctrl+C", "Clear line"), ("Esc", "Hide")],
+    "waiting": [("Esc", "Cancel")],
+}
+PLACEHOLDERS = {
+    "start": "Describe what you want to do, like: find files bigger than 100 MB",
+    "chat": "Type a follow-up",
+    "suggestion": "Not quite right? Type what to change",
+}
+
+
+def keybar_lines(items: List[Tuple[str, str]], width: int) -> List[str]:
+    """Lay key chips out left to right, wrapping onto more rows when the pane is narrow."""
+    lines, current, used = [], "", 0
+    for key, label in items:
+        chip_width = text_width(key) + 2 + 1 + text_width(label)
+        gap = 3 if current else 1
+        if current and used + gap + chip_width > width - 1:
+            lines.append(current)
+            current, used, gap = "", 0, 1
+        current += " " * gap + REVERSE + BOLD + " " + key + " " + RESET + " " + label
+        used += gap + chip_width
+    lines.append(current)
+    return lines
 
 
 # --------------------------------------------------------------------------
@@ -885,7 +923,7 @@ class Terminal:
         return self
 
     def __exit__(self, *exc):
-        self.write("\x1b[?2004l" + RESET)
+        self.write("\x1b[?2004l\x1b[r" + RESET)
         termios.tcsetattr(self.fd, termios.TCSANOW, self.saved)
 
     def _on_resize(self, *_):
@@ -902,6 +940,13 @@ class Terminal:
             return os.get_terminal_size(sys.stdout.fileno()).columns
         except OSError:
             return 80
+
+    @staticmethod
+    def height() -> int:
+        try:
+            return os.get_terminal_size(sys.stdout.fileno()).lines
+        except OSError:
+            return 24
 
     def read(self, decoder: KeyDecoder, timeout: Optional[float]) -> List[Key]:
         ready, _, _ = select.select([self.fd], [], [], timeout)
@@ -929,6 +974,7 @@ class Drawer:
         self.input_index = len(self.inputs)
         self.editor = LineEditor()
         self.decoder = KeyDecoder()
+        self.footer_rows = 0
 
     # -- state ---------------------------------------------------------
 
@@ -939,13 +985,33 @@ class Drawer:
 
     # -- drawing -------------------------------------------------------
 
+    def situation(self) -> str:
+        if self.editor.chars:
+            return "typing"
+        s = self.last_suggestion()
+        if s and s.command:
+            return "suggestion"
+        return "chat" if self.messages else "start"
+
+    def redraw(self) -> None:
+        """Clear the pane, pin the key bar to the bottom and draw the whole chat above it."""
+        width, height = self.term.width(), self.term.height()
+        rows = max(len(keybar_lines(items, width)) for items in KEYBARS.values())
+        self.footer_rows = rows if height >= rows + 5 else 0
+        out = "\x1b]2;commander\x07\x1b[r\x1b[2J\x1b[3J"
+        if self.footer_rows:
+            # Text scrolls only inside rows 1..bottom; a blank row separates it from the key bar.
+            out += f"\x1b[1;{height - self.footer_rows - 1}r"
+        self.term.write(out + "\x1b[H")
+        self.draw_header()
+        self.draw_history()
+        self.draw_input()
+
     def draw_header(self) -> None:
-        """Clear the pane and draw the title line plus one blank line."""
         room = self.term.width() - len(INDENT) - len("commander") - len(self.cfg.model) - 7
         where = self.cfg.remote or fit_path(self.cfg.remote_cwd or self.cfg.cwd or "", max(10, room))
         meta = sanitize(f"{self.cfg.model} · {where}")
-        line = INDENT + MAGENTA + BOLD + "commander" + RESET + DIM + "  " + meta + RESET
-        self.term.write("\x1b]2;commander\x07\x1b[2J\x1b[3J\x1b[H" + line + "\n\n")
+        self.term.write(INDENT + MAGENTA + BOLD + "commander" + RESET + DIM + "  " + meta + RESET + "\n\n")
 
     def draw_history(self) -> None:
         width = self.term.width()
@@ -955,22 +1021,28 @@ class Drawer:
             elif message.get("role") == "assistant":
                 self.term.write(render_suggestion(parse_reply(message.get("content", "")), width))
 
-    def placeholder(self) -> str:
-        s = self.last_suggestion()
-        if s and s.command:
-            return "↵ insert · type to refine · ^R another · ^L new chat · esc hide"
-        if self.messages:
-            return "type a follow-up · ^L new chat · esc hide"
-        return "describe what you want to do · esc hide"
+    def draw_footer(self, situation: str) -> None:
+        if not self.footer_rows:
+            return
+        width, height = self.term.width(), self.term.height()
+        lines = keybar_lines(KEYBARS[situation], width)
+        lines += [""] * (self.footer_rows - len(lines))
+        first = height - self.footer_rows + 1
+        out = "\x1b7"  # save the cursor, draw outside the scroll region, restore
+        for n, line in enumerate(lines):
+            out += f"\x1b[{first + n};1H\x1b[2K" + line
+        self.term.write(out + "\x1b8")
 
     def draw_input(self) -> None:
         width = self.term.width()
         room = max(1, width - PROMPT_WIDTH - 1)
+        situation = self.situation()
+        self.draw_footer(situation)
         if self.editor.chars:
             visible, cursor = self.editor.view(room)
             self.term.write("\r\x1b[2K" + PROMPT + visible + f"\r\x1b[{PROMPT_WIDTH + cursor}C")
         else:
-            hint = self.placeholder()
+            hint = PLACEHOLDERS[situation]
             if text_width(hint) > room:
                 hint = hint[: room - 1] + "…" if room > 1 else ""
             self.term.write("\r\x1b[2K" + PROMPT + DIM + hint + RESET + f"\r\x1b[{PROMPT_WIDTH}C")
@@ -979,9 +1051,7 @@ class Drawer:
 
     def run(self) -> int:
         self.store.prune()
-        self.draw_header()
-        self.draw_history()
-        self.draw_input()
+        self.redraw()
         while True:
             try:
                 keys = self.term.read(self.decoder, 0.25)
@@ -989,7 +1059,7 @@ class Drawer:
                 return 0
             if self.term.resized:
                 self.term.resized = False
-                self.draw_input()
+                self.redraw()
             for key in keys:
                 result = self.on_key(key)
                 if result is not None:
@@ -1023,7 +1093,7 @@ class Drawer:
             self.messages = []
             self.store.clear_session()
             self.editor.set("")
-            self.draw_header()
+            self.redraw()
             return None
         if name == "ctrl-r":
             s = self.last_suggestion()
@@ -1079,6 +1149,7 @@ class Drawer:
 
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
+        self.draw_footer("waiting")
         started = time.time()
         frame = 0
         while thread.is_alive():
@@ -1086,7 +1157,7 @@ class Drawer:
             timer = f"  {elapsed:.0f}s" if elapsed >= 3 else ""
             self.term.write(
                 "\r\x1b[2K" + INDENT + MAGENTA + SPINNER[frame % len(SPINNER)] + RESET
-                + DIM + " thinking" + timer + " · esc to cancel" + RESET
+                + DIM + " thinking" + timer + RESET
             )  # fmt: skip
             frame += 1
             try:
@@ -1103,9 +1174,21 @@ class Drawer:
         return result[0]
 
     def finish(self, action: str, text: str = "") -> int:
-        """Tell the Lua side what to do with the original pane, then exit, which closes the drawer."""
+        """Tell the Lua side what to do with the original pane, then exit, which closes the drawer.
+
+        Exiting straight away can tear the pane down before WezTerm delivers the event (seen
+        with unix mux domains), so wait until Lua answers with the quit sequence.
+        """
         payload = {"action": action, "text": text, "nonce": time.time()}
         self.term.write("\r\x1b[2K" + osc_user_var(EVENT_VAR, json.dumps(payload)))
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            try:
+                keys = self.term.read(self.decoder, deadline - time.time())
+            except EOFError:
+                break
+            if any(k.name == "quit" for k in keys):
+                break
         return 0
 
 
