@@ -407,6 +407,16 @@ class ChatCompletionTest(unittest.TestCase):
         self.assertEqual(request["body"]["reasoning_effort"], "low")
         self.assertNotIn("temperature", request["body"])
 
+    def test_default_model_gets_low_effort_others_get_none(self):
+        server = FakeServer()
+        try:
+            for model, expected in ((c.DEFAULT_MODEL, "low"), ("llama3", None)):
+                cfg = c.Config(base_url=server.url, api_key="k", model=model, cwd="/")
+                c.chat_completion(cfg, creds_for(cfg), [])
+                self.assertEqual(server.requests[-1]["body"].get("reasoning_effort"), expected)
+        finally:
+            server.close()
+
     def test_no_key_for_local_server_sends_no_auth(self):
         server = FakeServer()
         try:

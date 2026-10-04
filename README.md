@@ -92,7 +92,7 @@ commander.apply_to_config(config, {
   api_key_env = nil,             -- nil means OPENAI_API_KEY (see "The API key")
   api_key_command = nil,
   api_key = nil,
-  reasoning_effort = nil,        -- e.g. "low", for reasoning models that accept it
+  reasoning_effort = nil,        -- nil: "low" for gpt-6.1-sol, not sent for other models
   timeout = 60,                  -- seconds; raise it for slow local models
 
   height = 0.4,                  -- drawer height as a fraction of the tab

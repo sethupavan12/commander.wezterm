@@ -31,7 +31,7 @@ M.defaults = {
 	api_key_env = nil, -- nil: OPENAI_API_KEY, but only sent to OpenAI or $OPENAI_BASE_URL
 	api_key_command = nil, -- e.g. "op read op://Private/OpenAI/credential"
 	api_key = nil, -- discouraged; prefer api_key_env or api_key_command
-	reasoning_effort = nil, -- e.g. "low" for reasoning models that accept it
+	reasoning_effort = nil, -- nil: "low" for the default model, unset for others
 	timeout = 60,
 
 	-- Drawer height as a fraction of the tab.

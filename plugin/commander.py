@@ -45,6 +45,7 @@ except ImportError:  # Windows
 
 VERSION = "0.1.0"
 DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_EFFORT = "low"  # about twice as fast as the default for this model, same quality for one-liners
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_KEY_ENV = "OPENAI_API_KEY"
 EVENT_VAR = "wezterm_commander_event"
@@ -371,8 +372,9 @@ def chat_completion(cfg: Config, creds: Credentials, messages: List[dict]) -> st
     if creds.api_key and creds.base_url.startswith("http://") and not is_loopback(creds.base_url):
         raise ApiError(f"Refusing to send your API key over plain http to {creds.base_url}. Use https.")
     body = {"model": cfg.model, "messages": messages}
-    if cfg.reasoning_effort:
-        body["reasoning_effort"] = cfg.reasoning_effort
+    effort = cfg.reasoning_effort or (DEFAULT_EFFORT if cfg.model == DEFAULT_MODEL else None)
+    if effort:
+        body["reasoning_effort"] = effort
     headers = {"Content-Type": "application/json", "User-Agent": "commander.wezterm/" + VERSION}
     if creds.api_key:
         headers["Authorization"] = "Bearer " + creds.api_key
