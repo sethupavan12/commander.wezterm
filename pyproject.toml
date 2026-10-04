@@ -1,0 +1,8 @@
+# Only tool configuration lives here: the plugin ships as plain files, there is nothing to pip install.
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["UP006", "UP007", "UP035", "UP045", "SIM105"]  # keep typing.List/Optional for Python 3.8

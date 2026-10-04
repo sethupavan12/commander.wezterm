@@ -1,0 +1,190 @@
+# commander.wezterm
+
+Press a key in WezTerm, say what you want in plain English, get a shell command back. Press Enter and it lands on your prompt, ready to edit or run.
+
+<!-- demo.gif goes here -->
+
+```
+❯ find files bigger than 100mb, only show size and path
+  $ find . -type f -size +100M -exec ls -lh {} + | awk '{print $5, $9}'
+    -exec ... {} + batches files into a single ls call.
+    awk '{print $5, $9}' keeps just the size and path columns.
+
+❯ ↵ insert · type to refine · ^R another · ^L new chat · esc hide
+```
+
+It opens as a drawer at the bottom of the tab, so the pane you were working in stays where it was. Nothing gets typed into it until you accept a command, and accepting doesn't run it. You still press Enter yourself.
+
+The explanation only shows up when the command has something worth explaining. You won't get a lecture on `git status`. Destructive commands come with a one-line warning.
+
+## Install
+
+You need:
+
+- WezTerm 20230712 or newer (plugin support). Tested on 20240203.
+- Python 3.8 or newer. macOS ships one at `/usr/bin/python3`, and most Linux distros do too. No pip packages.
+- macOS or Linux. Windows isn't supported yet.
+- An OpenAI API key, or any OpenAI-compatible server (Ollama, LM Studio, OpenRouter, Groq, vLLM, and so on).
+
+Add this to `~/.wezterm.lua`, after `config` is created:
+
+```lua
+local commander = wezterm.plugin.require("https://github.com/sethupavan12/commander.wezterm")
+commander.apply_to_config(config)
+```
+
+Then make sure `OPENAI_API_KEY` is exported in your shell profile. That's it. Press `Cmd+I` on macOS or `Ctrl+Shift+I` on Linux.
+
+## Keys
+
+In your terminal:
+
+| Key | What it does |
+| --- | --- |
+| `Cmd+I` / `Ctrl+Shift+I` | Open the drawer. Press again inside it to hide it. |
+
+In the drawer:
+
+| Key | What it does |
+| --- | --- |
+| type, then `Enter` | Ask. Once there's a suggestion, whatever you type is feedback on it ("only .js files", "use rg instead"). |
+| `Enter` on an empty line | Insert the suggested command into your pane and jump back to it. |
+| `Ctrl+R` | Ask for a different command. |
+| `Ctrl+L` | Start a new chat. |
+| `Esc` | Hide the drawer. If a request is in flight, `Esc` cancels it instead. |
+| `Up` / `Down` | Scroll through questions you asked before. |
+| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+B`, `Alt+F` | The usual line editing. |
+
+Each pane has its own chat. Hide the drawer, do something else, press the key again, and the conversation is still there. Chats untouched for a day start fresh.
+
+## The API key
+
+The drawer looks for a key in this order:
+
+1. `api_key` in your plugin options. Works, but it puts the key in your config file.
+2. The environment variable named by `api_key_env` (default `OPENAI_API_KEY`).
+3. If that's empty: the output of `api_key_command` when you set one, otherwise your login shell. On macOS, WezTerm started from the Dock doesn't see variables exported in `~/.zshrc`, so the drawer starts your shell once in the background (`$SHELL -l -i -c env`) and reads them from there. `OPENAI_BASE_URL` is picked up the same way. This takes under a second and happens while you're still typing.
+
+Your OpenAI key only goes to OpenAI, or to `$OPENAI_BASE_URL` if you set that, which is the convention the official SDKs follow. If you point `base_url` at another provider, name that provider's key with `api_key_env` or `api_key_command`. The drawer won't quietly send your OpenAI key there. It also refuses to send any key over plain `http://` except to localhost, and it doesn't follow redirects.
+
+If you keep the key in a password manager, use `api_key_command`:
+
+```lua
+commander.apply_to_config(config, {
+  -- 1Password
+  api_key_command = "op read op://Private/OpenAI/credential",
+  -- or the macOS keychain: security add-generic-password -s openai -a "$USER" -w
+  -- api_key_command = "security find-generic-password -s openai -w",
+})
+```
+
+## Configuration
+
+Every option is optional. These are the defaults:
+
+```lua
+commander.apply_to_config(config, {
+  key = "i",                     -- set to false to bind it yourself (see below)
+  mods = "CMD",                  -- "CTRL|SHIFT" on Linux
+
+  model = "gpt-6.1-sol",
+  base_url = nil,                -- nil uses $OPENAI_BASE_URL, then https://api.openai.com/v1
+  api_key_env = nil,             -- nil means OPENAI_API_KEY (see "The API key")
+  api_key_command = nil,
+  api_key = nil,
+  reasoning_effort = nil,        -- e.g. "low", for reasoning models that accept it
+  timeout = 60,                  -- seconds; raise it for slow local models
+
+  height = 0.4,                  -- drawer height as a fraction of the tab
+  screen_context_lines = 0,      -- send this many lines of your pane's output along
+  python = nil,                  -- path to python3; nil finds one
+})
+```
+
+### Other providers
+
+Anything that speaks the OpenAI chat completions API works. Point `base_url` at it and pick a model:
+
+```lua
+-- Ollama
+commander.apply_to_config(config, { base_url = "http://localhost:11434/v1", model = "qwen2.5-coder:7b" })
+
+-- LM Studio
+commander.apply_to_config(config, { base_url = "http://localhost:1234/v1", model = "your-loaded-model" })
+
+-- OpenRouter
+commander.apply_to_config(config, {
+  base_url = "https://openrouter.ai/api/v1",
+  model = "openai/gpt-6.1-sol",     -- any model id OpenRouter lists
+  api_key_env = "OPENROUTER_API_KEY",
+})
+```
+
+Local servers don't need a key. If none is found, the request goes out without one.
+
+Small local models are slow and wrong more often. A 4B model can take close to a minute per answer on a laptop, so bump `timeout` if you go that way.
+
+### Screen context
+
+With `screen_context_lines = 80`, the last 80 lines of the pane you came from go along with your question. Then "fix that error" or "rerun that with sudo" just work. It's off by default because whatever is on your screen, tokens and passwords included, gets sent to the model.
+
+### Your own key binding
+
+```lua
+commander.apply_to_config(config, { key = false })
+
+table.insert(config.keys, { key = "k", mods = "CTRL|ALT", action = commander.action() })
+```
+
+You can also call `commander.toggle(window, pane)` from your own `action_callback`.
+
+## What gets sent
+
+Each request carries your question, the conversation so far in that pane, and a short description of the environment: OS and version, shell name, current directory, and up to 60 file names from that directory. Nothing from your screen is sent unless you turn on `screen_context_lines`.
+
+If the pane is running `ssh` (or `mosh`, `docker`, `kubectl` and friends), the drawer says so instead. It tells the model the command runs on another machine with an unknown OS and leaves your local file names out.
+
+Chats are saved as JSON under `~/.local/state/wezterm-commander/` (or `$XDG_STATE_HOME`), in a folder only you can read. The last 200 questions you typed are kept there too, so `Up` can recall them in any pane. Delete the folder to wipe it all. API keys are never written to disk.
+
+## How it works
+
+The plugin is two files.
+
+`plugin/init.lua` binds the key and opens a full-width split at the bottom of the tab running `plugin/commander.py`. It passes the settings, the target pane's id and its working directory through an environment variable.
+
+`commander.py` is the drawer. It draws the chat, edits your input, and calls the chat completions endpoint with Python's standard library. When you accept a command, it sets an OSC 1337 user var with the command in it and exits. The Lua side catches the `user-var-changed` event, pastes the command into your original pane with `pane:send_paste` and focuses it.
+
+The paste matters. With bracketed paste (on by default in zsh, fish and bash 5.1+), even a multi-line command waits at your prompt instead of running. Shells without it, like the bash 3.2 that ships as macOS's `/bin/bash`, run each line of a multi-line paste as it arrives. The drawer flags multi-line suggestions so you know which ones those are. Single-line commands are safe everywhere.
+
+Model replies are untrusted text. Before anything is drawn or pasted, control characters and bidi overrides are stripped, so a reply can't sneak escape sequences into your terminal. The Lua side only accepts events from drawer panes it opened itself, so another program printing the same escape sequence can't make it paste anything.
+
+## Troubleshooting
+
+**Nothing happens when I press the key.** Check WezTerm's debug overlay (`Ctrl+Shift+L`) for Lua errors, and that `apply_to_config` runs before you `return config`. If you set `config.keys = {...}` after calling `apply_to_config`, you've overwritten the binding. Call it after.
+
+**"No API key found".** Check that your login shell actually sees the key: `$SHELL -lic 'echo $OPENAI_API_KEY'`. If it prints nothing, export it in `~/.zshrc` (or your shell's equivalent) or use `api_key_command`. See [The API key](#the-api-key).
+
+**The drawer flashes and disappears.** Python failed to start. Run `python3 /path/to/commander.py` in a pane to see the error, or set `python` to an interpreter you know works. Plugins live under `~/Library/Application Support/wezterm/plugins/` on macOS and `~/.local/share/wezterm/plugins/` on Linux.
+
+**SSL errors with python.org Python on macOS.** Run its `Install Certificates.command` once, or point `python` at `/usr/bin/python3` or Homebrew's.
+
+**The drawer stays open after I accept, saying the process exited.** You have `exit_behavior = "Hold"`. The drawer closes by exiting, so use `"Close"` or `"CloseOnCleanExit"`.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests      # tests, standard library only
+uvx ruff check plugin tests && uvx ruff format --check plugin tests
+npx @johnnymorganz/stylua-bin --check plugin
+```
+
+To try local changes, load the plugin from your checkout instead of GitHub:
+
+```lua
+local commander = dofile("/path/to/commander.wezterm/plugin/init.lua")
+commander.apply_to_config(config, { helper = "/path/to/commander.wezterm/plugin/commander.py" })
+```
+
+## License
+
+MIT
