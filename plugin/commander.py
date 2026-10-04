@@ -769,9 +769,9 @@ def osc_user_var(name: str, value: str) -> str:
 
 
 def short_path(path: str) -> str:
-    home = os.path.expanduser("~")
-    if path == home or path.startswith(home + os.sep):
-        return "~" + path[len(home) :]
+    for home in {os.path.expanduser("~"), os.path.realpath(os.path.expanduser("~"))}:
+        if path == home or path.startswith(home + os.sep):
+            return "~" + path[len(home) :]
     return path
 
 

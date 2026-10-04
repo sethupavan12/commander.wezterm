@@ -228,6 +228,11 @@ class RenderingTest(unittest.TestCase):
         lines = plain(c.render_suggestion(c.Suggestion("for f in *; do\n  echo $f\ndone"), 80)).split("\n")
         self.assertEqual(lines[:3], ["  $ for f in *; do", "      echo $f", "    done"])
 
+    def test_short_path_handles_symlinked_home(self):
+        home = os.path.realpath(os.path.expanduser("~"))
+        self.assertEqual(c.short_path(os.path.join(home, "src")), "~/src")
+        self.assertEqual(c.short_path("/etc"), "/etc")
+
     def test_fit_path(self):
         self.assertEqual(c.fit_path("/a/b/c/d/eeeeee", 11), "…/d/eeeeee")
         self.assertEqual(c.fit_path("/short", 40), "/short")
