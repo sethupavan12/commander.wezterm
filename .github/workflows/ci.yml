@@ -33,7 +33,7 @@ jobs:
       - uses: astral-sh/ruff-action@v3
         with:
           args: format --check plugin tests
-      - uses: JohnnyMorganz/stylua-action@v4
+      - uses: JohnnyMorganz/stylua-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
