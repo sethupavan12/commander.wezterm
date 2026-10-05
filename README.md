@@ -5,18 +5,9 @@
 
 A [WezTerm](https://wezfurlong.org/wezterm/) plugin. Press a key in WezTerm, say what you want in plain English, get a shell command back. Press Enter and it lands on your prompt, ready to edit or run.
 
-```
-  commander  gpt-6-luna · ~/code/app
+![commander.wezterm: press Cmd+I, ask for a command in plain English, refine it, and paste it at your prompt](assets/demo.gif)
 
-❯ find files bigger than 100mb, only show size and path
-  $ find . -type f -size +100M -exec ls -lh {} + | awk '{print $5, $9}'
-    -exec ... {} + batches files into a single ls call.
-    awk '{print $5, $9}' keeps just the size and path columns.
-
-❯ Not quite right? Type what to change
-
- [Enter] Use this command   [Ctrl+R] Different command   [Ctrl+L] New chat   [Esc] Hide
-```
+<sub>Captured from a live WezTerm session running the plugin against the real `gpt-6-luna` API, at real speed.</sub>
 
 It opens as a drawer at the bottom of the tab, so the pane you were working in stays where it was. Nothing gets typed into it until you accept a command, and accepting doesn't run it. You still press Enter yourself.
 
