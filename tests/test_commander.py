@@ -629,7 +629,7 @@ class DrawerTest(unittest.TestCase):
         drawer, term = self.drawer([b"list\r", b"\x12", b"\r"], ['{"command": "ls"}', '{"command": "find ."}'])
         drawer.run()
         self.assertEqual(self.asked[1][-1]["content"], c.ANOTHER_PROMPT)
-        self.assertIn("another option", plain(term.text))
+        self.assertIn("different command, please", plain(term.text))
         self.assertEqual(json.loads(user_vars(term.text)["wezterm_commander_event"])["text"], "find .")
 
     def test_error_restores_input(self):
@@ -672,7 +672,7 @@ class DrawerTest(unittest.TestCase):
         drawer, term = self.drawer([b"list\r", b"more", b"\x15", b"\x1b"], ['{"command": "ls"}'])
         drawer.run()
         text = plain(term.text)
-        for label in ("Ask", "Past questions", "Use this command", "Try another way", "New chat", "Send", "Cancel"):
+        for label in ("Ask", "Past questions", "Use this command", "Different command", "New chat", "Send", "Cancel"):
             self.assertIn(label, text)
         self.assertNotIn("^R", text)
         self.assertIn("\x1b[1;21r", term.text)  # 24 rows: chat in 1-21, spacer, 2-row key bar

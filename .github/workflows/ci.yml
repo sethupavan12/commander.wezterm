@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, python: "3.8" }
+          - { os: ubuntu-22.04, python: "3.8" }  # newer runner images no longer ship 3.8
           - { os: ubuntu-latest, python: "3.13" }
           - { os: macos-latest, python: "3.9" }  # the version /usr/bin/python3 ships on macOS
           - { os: macos-latest, python: "3.13" }

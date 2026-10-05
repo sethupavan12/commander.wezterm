@@ -72,7 +72,7 @@ KNOWN_SHELLS = {
 }
 # Foreground programs that mean the pane is really talking to another machine.
 REMOTE_PROGRAMS = {"ssh", "mosh", "mosh-client", "et", "docker", "podman", "kubectl", "lxc", "multipass", "vagrant"}
-ANOTHER_PROMPT = "Show me a different way to do this."
+ANOTHER_PROMPT = "Suggest a different command for the same task."
 
 
 # --------------------------------------------------------------------------
@@ -815,7 +815,7 @@ def hard_wrap(line: str, width: int) -> List[str]:
 
 
 def render_user(text: str) -> str:
-    body = BOLD + sanitize(text) if text != ANOTHER_PROMPT else DIM + "↻ another option"
+    body = BOLD + sanitize(text) if text != ANOTHER_PROMPT else DIM + "↻ different command, please"
     return PROMPT + body + RESET + "\n"
 
 
@@ -870,7 +870,7 @@ KEYBARS = {
     "chat": [("Enter", "Ask"), ("↑ ↓", "Past questions"), ("Ctrl+L", "New chat"), ("Esc", "Hide")],
     "suggestion": [
         ("Enter", "Use this command"),
-        ("Ctrl+R", "Try another way"),
+        ("Ctrl+R", "Different command"),
         ("Ctrl+L", "New chat"),
         ("Esc", "Hide"),
     ],

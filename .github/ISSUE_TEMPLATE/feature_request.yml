@@ -1,0 +1,15 @@
+name: Feature request
+description: An idea that would make commander.wezterm more useful
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation you're in and what gets in your way. Start with the problem, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?

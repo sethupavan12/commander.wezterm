@@ -1,8 +1,9 @@
 # commander.wezterm
 
-Press a key in WezTerm, say what you want in plain English, get a shell command back. Press Enter and it lands on your prompt, ready to edit or run.
+[![CI](https://github.com/sethupavan12/commander.wezterm/actions/workflows/ci.yml/badge.svg)](https://github.com/sethupavan12/commander.wezterm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-<!-- demo.gif goes here -->
+A [WezTerm](https://wezfurlong.org/wezterm/) plugin. Press a key in WezTerm, say what you want in plain English, get a shell command back. Press Enter and it lands on your prompt, ready to edit or run.
 
 ```
   commander  gpt-6-luna · ~/code/app
@@ -14,7 +15,7 @@ Press a key in WezTerm, say what you want in plain English, get a shell command 
 
 ❯ Not quite right? Type what to change
 
- [Enter] Use this command   [Ctrl+R] Try another way   [Ctrl+L] New chat   [Esc] Hide
+ [Enter] Use this command   [Ctrl+R] Different command   [Ctrl+L] New chat   [Esc] Hide
 ```
 
 It opens as a drawer at the bottom of the tab, so the pane you were working in stays where it was. Nothing gets typed into it until you accept a command, and accepting doesn't run it. You still press Enter yourself.
@@ -39,6 +40,8 @@ commander.apply_to_config(config)
 
 Then make sure `OPENAI_API_KEY` is exported in your shell profile. That's it. Press `Cmd+I` on macOS or `Ctrl+Shift+I` on Linux.
 
+To update later, run `wezterm.plugin.update_all()` from the debug overlay (`Ctrl+Shift+L`), then reload your config.
+
 ## Keys
 
 In your terminal:
@@ -53,7 +56,7 @@ In the drawer you don't need to remember any of this. A bar along the bottom alw
 | --- | --- |
 | Type, then `Enter` | Ask. Once there's a suggestion, whatever you type is feedback on it ("only .js files", "use rg instead"). |
 | `Enter` with nothing typed | Use the suggested command: it's pasted into your pane and you jump back there. |
-| `Ctrl+R` | Try another way: ask for a different command. |
+| `Ctrl+R` | Different command: get another command for the same task. |
 | `Ctrl+L` | Start a new chat. |
 | `Esc` | Hide the drawer. While waiting for an answer, `Esc` cancels instead. |
 | `Ctrl+C` | Clear what you've typed. |
@@ -190,6 +193,10 @@ local commander = dofile("/path/to/commander.wezterm/plugin/init.lua")
 commander.apply_to_config(config, { helper = "/path/to/commander.wezterm/plugin/commander.py" })
 ```
 
+## Contributing
+
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the checks CI runs, and the few rules that keep the plugin a one-line install. Please report security problems privately, as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)

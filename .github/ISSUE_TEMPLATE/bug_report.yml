@@ -1,0 +1,42 @@
+name: Bug report
+description: Something doesn't work the way the README says it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: wezterm
+    attributes:
+      label: WezTerm version
+      description: Output of `wezterm --version`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and Python
+      description: For example "macOS 15.6, /usr/bin/python3 3.9.6"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model and provider
+      description: For example "gpt-6-luna on OpenAI" or "qwen2.5-coder:7b on Ollama"
+  - type: textarea
+    id: config
+    attributes:
+      label: Your commander.apply_to_config call
+      description: Leave out any API keys.
+      render: lua
+  - type: checkboxes
+    id: mux
+    attributes:
+      label: Setup
+      options:
+        - label: I use a unix or ssh mux domain (`connect unix`, `default_gui_startup_args`, etc.)
