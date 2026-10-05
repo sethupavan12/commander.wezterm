@@ -17,8 +17,8 @@ The explanation only shows up when the command has something worth explaining. Y
 
 You need:
 
-- WezTerm 20230712 or newer (plugin support). Tested on 20240203.
-- Python 3.8 or newer. macOS ships one at `/usr/bin/python3`, and most Linux distros do too. No pip packages.
+- WezTerm 20230320 or newer (the first release with plugins). Tested on 20240203.
+- Python 3.8 or newer, standard library only, nothing to pip install. On macOS that's Homebrew's `python3` or the one that comes with the Xcode Command Line Tools (`xcode-select --install`). Without either, `/usr/bin/python3` is only a stub that asks you to install them. Linux distros ship Python already.
 - macOS or Linux. Windows isn't supported yet.
 - An OpenAI API key, or any OpenAI-compatible server (Ollama, LM Studio, OpenRouter, Groq, vLLM, and so on).
 
@@ -46,13 +46,13 @@ In the drawer you don't need to remember any of this. A bar along the bottom alw
 | Key | What it does |
 | --- | --- |
 | Type, then `Enter` | Ask. Once there's a suggestion, whatever you type is feedback on it ("only .js files", "use rg instead"). |
-| `Enter` with nothing typed | Use the suggested command: it's pasted into your pane and you jump back there. |
+| `Enter` with nothing typed | Use the suggested command: it's pasted into your pane and you jump back there. If the command comes with a warning, press `Enter` a second time to confirm. |
 | `Ctrl+R` | Different command: get another command for the same task. |
 | `Ctrl+L` | Start a new chat. |
-| `Esc` | Hide the drawer. While waiting for an answer, `Esc` cancels instead. |
-| `Ctrl+C` | Clear what you've typed. |
+| `Esc` or `Ctrl+D` | Hide the drawer. While waiting for an answer, `Esc` cancels instead. |
+| `Ctrl+C` | Clear what you've typed. With nothing typed, hide the drawer. |
 | `Up` / `Down` | Bring back questions you asked before. |
-| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+B`, `Alt+F` | The usual line editing, for people who like it. |
+| `Ctrl+A`, `Ctrl+E`, `Ctrl+B`, `Ctrl+F`, `Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+B`, `Alt+F` | The usual line editing, for people who like it. |
 
 Each pane has its own chat. Hide the drawer, do something else, press the key again, and the conversation is still there. Chats untouched for a day start fresh.
 
@@ -97,6 +97,7 @@ commander.apply_to_config(config, {
   height = 0.4,                  -- drawer height as a fraction of the tab
   screen_context_lines = 0,      -- send this many lines of your pane's output along
   python = nil,                  -- path to python3; nil finds one
+  helper = nil,                  -- path to commander.py; nil finds it in the installed plugin
 })
 ```
 
@@ -143,6 +144,10 @@ Each request carries your question, the conversation so far in that pane, and a 
 
 If the pane is running `ssh` (or `mosh`, `docker`, `kubectl` and friends), the drawer says so instead. It tells the model the command runs on another machine with an unknown OS and leaves your local file names out.
 
+File names and screen contents can come from anywhere, including a repository you just cloned or a server you're logged into. Someone could name a file to trick the model. The model is told to treat them as data, and on top of that the drawer checks every suggestion locally: anything that deletes recursively, uses `sudo`, pipes a download into a shell, force-pushes, wipes disks and so on gets a warning even if the model gave none, and needs a second `Enter`.
+
+The drawer only opens in panes on this machine. In panes from an SSH or TLS mux domain (`ssh_domains`, `tls_clients`), where the shell runs on another host, you get a message instead.
+
 Chats are saved as JSON under `~/.local/state/wezterm-commander/` (or `$XDG_STATE_HOME`), in a folder only you can read. The last 200 questions you typed are kept there too, so `Up` can recall them in any pane. Delete the folder to wipe it all. API keys are never written to disk.
 
 ## How it works
@@ -153,9 +158,13 @@ The plugin is two files.
 
 `commander.py` is the drawer. It draws the chat, edits your input, and calls the chat completions endpoint with Python's standard library. When you accept a command, it sets an OSC 1337 user var with the command in it and exits. The Lua side catches the `user-var-changed` event, pastes the command into your original pane with `pane:send_paste` and focuses it.
 
-The paste matters. With bracketed paste (on by default in zsh, fish and bash 5.1+), even a multi-line command waits at your prompt instead of running. Shells without it, like the bash 3.2 that ships as macOS's `/bin/bash`, run each line of a multi-line paste as it arrives. The drawer flags multi-line suggestions so you know which ones those are. Single-line commands are safe everywhere.
+Only single lines are ever pasted. A newline in a paste is a problem: shells without bracketed paste (like the bash 3.2 that ships as macOS's `/bin/bash`, or a `python` prompt) run each line the moment it arrives. So the model is asked for one line, and when it sends several anyway the drawer joins them (`for f in *; do echo $f; done`) so what you see is what gets pasted. If joining would change the meaning, as with a heredoc, `Enter` copies the command to your clipboard instead, and the Lua side refuses to paste anything with a newline in it as a second line of defence.
 
-Model replies are untrusted text. Before anything is drawn or pasted, control characters and bidi overrides are stripped, so a reply can't sneak escape sequences into your terminal. The Lua side only accepts events from drawer panes it opened itself, so another program printing the same escape sequence can't make it paste anything.
+Model replies are untrusted text. Before anything is drawn or pasted, control characters, bidi overrides and invisible characters are stripped, so a reply can't sneak escape sequences into your terminal or show you something different from what gets pasted. The Lua side only accepts events from drawer panes it opened itself, so another program printing the same escape sequence can't make it paste anything.
+
+### Why Python?
+
+Most WezTerm plugins are pure Lua, and this one could have been too: prompt with `PromptInputLine`, call `curl`, show the answer in an `InputSelector`. But those overlays are one-shot dialogs. A chat you can refine, a scrolling history, a line editor and a key bar need a real program in a real pane. Python's standard library has everything that takes (HTTP, JSON, a raw terminal) and is already on nearly every Mac and Linux box, so the plugin stays a one-line install with nothing to download or compile.
 
 ## Troubleshooting
 
@@ -163,7 +172,7 @@ Model replies are untrusted text. Before anything is drawn or pasted, control ch
 
 **"No API key found".** Check that your login shell actually sees the key: `$SHELL -lic 'echo $OPENAI_API_KEY'`. If it prints nothing, export it in `~/.zshrc` (or your shell's equivalent) or use `api_key_command`. See [The API key](#the-api-key).
 
-**The drawer flashes and disappears.** Python failed to start. Run `python3 /path/to/commander.py` in a pane to see the error, or set `python` to an interpreter you know works. Plugins live under `~/Library/Application Support/wezterm/plugins/` on macOS and `~/.local/share/wezterm/plugins/` on Linux.
+**The drawer flashes and disappears.** Python failed to start. On a fresh Mac this is usually the `/usr/bin/python3` stub: run `xcode-select --install`, or `brew install python`. Run `python3 /path/to/commander.py` in a pane to see the error, or set `python` to an interpreter you know works. Plugins live under `~/Library/Application Support/wezterm/plugins/` on macOS and `~/.local/share/wezterm/plugins/` on Linux.
 
 **SSL errors with python.org Python on macOS.** Run its `Install Certificates.command` once, or point `python` at `/usr/bin/python3` or Homebrew's.
 
@@ -172,9 +181,10 @@ Model replies are untrusted text. Before anything is drawn or pasted, control ch
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests      # tests, standard library only
+python3 -m unittest discover -s tests      # Python tests, standard library only
+luajit tests/test_init.lua                 # Lua tests against a fake wezterm module
 uvx ruff check plugin tests && uvx ruff format --check plugin tests
-npx @johnnymorganz/stylua-bin --check plugin
+npx @johnnymorganz/stylua-bin --check plugin tests
 ```
 
 To try local changes, load the plugin from your checkout instead of GitHub:

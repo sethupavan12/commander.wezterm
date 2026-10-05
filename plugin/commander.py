@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import codecs
+import ipaddress
 import json
 import os
 import platform
@@ -53,6 +54,8 @@ SESSION_TTL_SECONDS = 24 * 3600
 MAX_HISTORY_MESSAGES = 24
 MAX_SCREEN_CHARS = 16000
 MAX_DIR_ENTRIES = 60
+MAX_RESPONSE_BYTES = 4 << 20  # a reply to "list my files" is a few KB; refuse anything absurd
+INPUT_TTL_SECONDS = 30 * 24 * 3600
 KNOWN_SHELLS = {
     "sh",
     "bash",
@@ -105,6 +108,8 @@ class Config:
         try:
             data = json.loads(raw)
         except ValueError:
+            data = {}
+        if not isinstance(data, dict):
             data = {}
         cfg = cls()
         for name in cfg.__dataclass_fields__:
@@ -176,25 +181,26 @@ class Credentials:
 
     def _resolve(self) -> None:
         cfg, env = self.cfg, self.environ
-        if cfg.api_key:
-            self.api_key, self.base_url = cfg.api_key, (cfg.base_url or DEFAULT_BASE_URL).rstrip("/")
-            return
-        key_env = cfg.api_key_env or DEFAULT_KEY_ENV
-        key = env.get(key_env)
         base_url = cfg.base_url or env.get("OPENAI_BASE_URL")
-        if not key and cfg.api_key_command:
-            key = self._run_key_command(cfg.api_key_command)
-        elif not key:
-            found = login_shell_env([key_env, "OPENAI_BASE_URL"], env)
-            key = found.get(key_env)
-            base_url = base_url or found.get("OPENAI_BASE_URL")
-        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        if cfg.api_key:
+            self.api_key, self.base_url = cfg.api_key, (base_url or DEFAULT_BASE_URL).rstrip("/")
+            return
         # Never hand the OpenAI key to some other server just because base_url points there.
         # It goes to OpenAI, to $OPENAI_BASE_URL (the SDK convention), or wherever the user
         # explicitly asked for it via api_key_env / api_key_command.
         trusted = (
             cfg.api_key_env or cfg.api_key_command or not cfg.base_url or cfg.base_url.rstrip("/") == DEFAULT_BASE_URL
         )
+        key_env = cfg.api_key_env or DEFAULT_KEY_ENV
+        key = env.get(key_env)
+        if not key and cfg.api_key_command:
+            key = self._run_key_command(cfg.api_key_command)
+        elif not key and trusted:
+            # Only worth starting a login shell when a key found there would actually be used.
+            found = login_shell_env([key_env, "OPENAI_BASE_URL"], env)
+            key = found.get(key_env)
+            base_url = base_url or found.get("OPENAI_BASE_URL")
+        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = key if key and trusted else None
 
     def _run_key_command(self, command: str) -> Optional[str]:
@@ -228,10 +234,26 @@ def login_shell_env(names: List[str], environ=os.environ, timeout: float = 6.0) 
         args = [shell, "-l", "-i", "-c", "echo __WC_ENV__; /usr/bin/env"]
         stdin = ""
     try:
-        out = subprocess.run(
-            args, input=stdin, capture_output=True, text=True, timeout=timeout, start_new_session=True
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
+        # From $HOME, not the pane's directory: rc files can react to the directory they start in.
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            cwd=os.path.expanduser("~"),
+            start_new_session=True,
+        )
+    except OSError:
+        return {}
+    try:
+        out, _ = proc.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # also whatever the rc files started
+        except OSError:
+            pass
+        proc.communicate()
         return {}
     found = {}
     for line in out.rpartition("__WC_ENV__\n")[2].splitlines():
@@ -261,7 +283,8 @@ Reply with ONLY a JSON object, no markdown fences, no other text:
 
 command
 - One ready-to-run command line for this exact shell and OS (BSD flags on macOS, GNU on Linux).
-- Chain steps with && or pipes instead of offering alternatives. Use multiple lines only when unavoidable.
+- Exactly one line. Chain steps with && or pipes, and write loops and conditionals on one line
+  (for f in *.log; do gzip "$f"; done). Never use heredocs or trailing backslashes.
 - It runs in the working directory above, so never cd into it first. No leading "$" or prompt.
 - Use a placeholder like <file> only when the request leaves the value unknown.
 - Prefer tools that ship with the OS. Use others only when the user mentions them or the context shows them in use.
@@ -360,7 +383,12 @@ OPENER = urllib.request.build_opener(NoRedirects)
 
 def is_loopback(url: str) -> bool:
     host = urllib.parse.urlparse(url).hostname or ""
-    return host in ("localhost", "::1") or host.startswith("127.")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def chat_completion(cfg: Config, creds: Credentials, messages: List[dict]) -> str:
@@ -372,7 +400,7 @@ def chat_completion(cfg: Config, creds: Credentials, messages: List[dict]) -> st
             f"No API key found. Export {cfg.api_key_env or DEFAULT_KEY_ENV} in your shell profile, or set "
             "api_key_command in your wezterm.lua (see the README)."
         )
-    if creds.api_key and creds.base_url.startswith("http://") and not is_loopback(creds.base_url):
+    if creds.api_key and urllib.parse.urlparse(creds.base_url).scheme == "http" and not is_loopback(creds.base_url):
         raise ApiError(f"Refusing to send your API key over plain http to {creds.base_url}. Use https.")
     body = {"model": cfg.model, "messages": messages}
     effort = cfg.reasoning_effort or (DEFAULT_EFFORT if cfg.model == DEFAULT_MODEL else None)
@@ -386,7 +414,10 @@ def chat_completion(cfg: Config, creds: Credentials, messages: List[dict]) -> st
     )
     try:
         with OPENER.open(request, timeout=cfg.timeout) as response:
-            data = json.loads(response.read().decode("utf-8", "replace"))
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise ApiError("The server sent an unreasonably large reply, so it was ignored.")
+            data = json.loads(raw.decode("utf-8", "replace"))
     except urllib.error.HTTPError as err:
         with err:
             raise ApiError(describe_http_error(err, cfg)) from None
@@ -410,7 +441,7 @@ def chat_completion(cfg: Config, creds: Credentials, messages: List[dict]) -> st
 def describe_http_error(err: urllib.error.HTTPError, cfg: Config) -> str:
     detail = ""
     try:
-        payload = json.loads(err.read().decode("utf-8", "replace"))
+        payload = json.loads(err.read(64 << 10).decode("utf-8", "replace"))
         error = payload.get("error", payload)
         detail = error.get("message", "") if isinstance(error, dict) else str(error)
     except Exception:
@@ -432,9 +463,74 @@ class Suggestion:
 
 
 def parse_reply(text) -> Suggestion:
-    """Pull command/explanation/warning out of a model reply, tolerating sloppy output."""
+    """Pull command/explanation/warning out of a model reply, tolerating sloppy output.
+
+    The command comes back as one line whenever that can be done safely, so what the
+    drawer shows is exactly what gets pasted, and a paste never carries a newline that
+    a shell without bracketed paste would run on its own. Dangerous commands always get
+    a warning, whatever the model said.
+    """
     s = _parse_reply(as_text(text))
-    return Suggestion(sanitize(s.command), sanitize(s.explanation), sanitize(s.warning))
+    command = sanitize(s.command)
+    command = one_line(command) or command
+    warning = sanitize(s.warning) or danger(command)
+    return Suggestion(command, sanitize(s.explanation), warning)
+
+
+# Words after which the next line continues the same shell statement.
+CONTINUES = ("do", "then", "else", "{", "(", "|", "||", "&&", ";", "in")
+
+
+def one_line(command: str) -> Optional[str]:
+    """Join a multi-line shell command into one equivalent line, or None if that isn't safe."""
+    if "\n" not in command:
+        return command
+    if "<<" in command or re.search(r"['\"`]", command) and _quote_spans_lines(command):
+        return None  # heredocs and multi-line strings change meaning when joined
+    joined = ""
+    for raw in command.split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not joined:
+            joined = line
+        elif joined.endswith("\\"):
+            joined = joined[:-1].rstrip() + " " + line
+        elif joined.endswith(CONTINUES) and re.search(r"(^|\s)(" + "|".join(map(re.escape, CONTINUES)) + r")$", joined):
+            joined += " " + line
+        else:
+            joined += "; " + line
+    return joined.replace(" ;", ";")
+
+
+def _quote_spans_lines(command: str) -> bool:
+    return any(line.count("'") % 2 or line.count('"') % 2 or line.count("`") % 2 for line in command.split("\n"))
+
+
+# Checked locally, so a warning shows up even if the model (or a prompt injection) leaves it out.
+DANGER = [
+    (r"\brm\s+(-\w*[rRf]|--recursive|--force)", "Deletes files and folders without asking."),
+    (r"\bfind\b.*(-delete\b|-exec\s+rm\b)", "Deletes every file it finds."),
+    (r"\bsudo\b|\bdoas\b", "Runs with administrator rights."),
+    (r"\b(dd|mkfs(\.\w+)?|fdisk|parted|wipefs)\b|\bdiskutil\s+(erase|partition|zero)", "Can wipe a whole disk."),
+    (r">\s*/dev/(sd|hd|nvme|disk|rdisk)", "Writes straight to a disk device."),
+    (r"\b(chmod|chown|chgrp)\s+(-\w*R|--recursive)", "Changes permissions on everything below."),
+    (r"\b(curl|wget|fetch)\b.*\|\s*(sudo\s+)?(ba|z|da|fi|k)?sh\b", "Downloads a script and runs it."),
+    (r"\|\s*(sudo\s+)?(python3?|perl|ruby|node)\s*(-\s*)?$", "Runs whatever comes through the pipe as code."),
+    (r"\bbase64\s+(-d|-D|--decode)\b.*\|", "Decodes hidden content and passes it on."),
+    (r"\bgit\s+push\b.*(\s--force\b|\s-f\b|\s--force-with-lease\b)", "Overwrites history on the remote."),
+    (r"\bgit\s+(reset\s+--hard|clean\s+-\w*[fdx]|checkout\s+--\s+\.|restore\s+\.)", "Throws away uncommitted work."),
+    (r"\b(kill|pkill|killall)\b", "Stops running processes."),
+    (r":\(\)\s*\{", "A fork bomb: it will freeze the machine."),
+    (r"\b(shutdown|reboot|halt)\b", "Shuts down or restarts the machine."),
+]
+
+
+def danger(command: str) -> str:
+    for pattern, reason in DANGER:
+        if re.search(pattern, command):
+            return reason
+    return ""
 
 
 def _parse_reply(text: str) -> Suggestion:
@@ -459,9 +555,12 @@ def _parse_reply(text: str) -> Suggestion:
     return Suggestion(command=text.strip())
 
 
-# C0 controls except tab and newline, DEL, C1 controls, and bidi overrides that can
+# C0 controls except tab and newline, DEL, C1 controls, bidi overrides, and invisible
+# characters (zero-width spaces, soft hyphens, line separators, BOM). Any of these can
 # make the text on screen differ from the text that gets inserted.
-UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+UNSAFE_CHARS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff9-\ufffb]"
+)
 
 
 def sanitize(text) -> str:
@@ -515,13 +614,26 @@ class Store:
         except OSError:
             pass
 
-    def load_inputs(self) -> List[str]:
+    def _load_input_entries(self) -> List[list]:
         data = self._read(self.inputs_path)
-        return [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        cutoff = time.time() - INPUT_TTL_SECONDS
+        entries = []
+        for item in data:
+            if isinstance(item, str):  # written by 0.1.0, before entries had timestamps
+                item = [item, time.time()]
+            if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str) and item[1] > cutoff:
+                entries.append(item)
+        return entries
+
+    def load_inputs(self) -> List[str]:
+        return [text for text, _ in self._load_input_entries()]
 
     def add_input(self, text: str) -> None:
-        inputs = [s for s in self.load_inputs() if s != text] + [text]
-        self._write(self.inputs_path, inputs[-200:])
+        """Remember a question for Up/Down. Questions older than 30 days are forgotten."""
+        entries = [e for e in self._load_input_entries() if e[0] != text] + [[text, time.time()]]
+        self._write(self.inputs_path, entries[-200:])
 
     def prune(self) -> None:
         folder = os.path.dirname(self.session_path)
@@ -839,7 +951,7 @@ def render_suggestion(s: Suggestion, width: int) -> str:
         for n, line in enumerate(wrap(s.warning, usable - 2, "")):
             lines.append(detail + YELLOW + ("⚠ " if n == 0 else "  ") + highlight_code(line, YELLOW) + RESET)
     if "\n" in s.command:
-        lines.append(detail + DIM + "multi-line: shells without bracketed paste run each line as it lands" + RESET)
+        lines.append(detail + DIM + "Spans several lines, so Enter copies it instead of pasting it." + RESET)
     if not lines:
         lines.append(INDENT + DIM + "(the model sent an empty answer, try rephrasing)" + RESET)
     return "\n".join(lines) + "\n\n"
@@ -874,6 +986,8 @@ KEYBARS = {
         ("Ctrl+L", "New chat"),
         ("Esc", "Hide"),
     ],
+    "confirm": [("Enter", "Yes, use it"), ("Ctrl+R", "Different command"), ("Esc", "Hide")],
+    "multiline": [("Enter", "Copy command"), ("Ctrl+R", "Different command"), ("Ctrl+L", "New chat"), ("Esc", "Hide")],
     "typing": [("Enter", "Send"), ("Ctrl+C", "Clear line"), ("Esc", "Hide")],
     "waiting": [("Esc", "Cancel")],
 }
@@ -881,6 +995,8 @@ PLACEHOLDERS = {
     "start": "Describe what you want to do, like: find files bigger than 100 MB",
     "chat": "Type a follow-up",
     "suggestion": "Not quite right? Type what to change",
+    "confirm": "Read the warning above. Press Enter again to use this command",
+    "multiline": "This command spans lines, so Enter copies it instead of pasting",
 }
 
 
@@ -975,6 +1091,7 @@ class Drawer:
         self.editor = LineEditor()
         self.decoder = KeyDecoder()
         self.footer_rows = 0
+        self.armed = False  # Enter was pressed once on a command with a warning
 
     # -- state ---------------------------------------------------------
 
@@ -990,7 +1107,9 @@ class Drawer:
             return "typing"
         s = self.last_suggestion()
         if s and s.command:
-            return "suggestion"
+            if "\n" in s.command:
+                return "multiline"
+            return "confirm" if self.armed else "suggestion"
         return "chat" if self.messages else "start"
 
     def redraw(self) -> None:
@@ -1068,6 +1187,7 @@ class Drawer:
                 self.draw_input()
 
     def on_key(self, key: Key) -> Optional[int]:
+        armed, self.armed = self.armed, False  # any key but a second Enter cancels the confirmation
         if self.editor.handle(key):
             return None
         name = key.name
@@ -1077,11 +1197,16 @@ class Drawer:
             text = self.editor.text.strip()
             if text:
                 self.submit(text)
-            else:
-                s = self.last_suggestion()
-                if s and s.command:
-                    return self.finish("insert", s.command)
-            return None
+                return None
+            s = self.last_suggestion()
+            if not s or not s.command:
+                return None
+            if "\n" in s.command:
+                return self.finish("copy", s.command)
+            if s.warning and not armed:
+                self.armed = True
+                return None
+            return self.finish("insert", s.command)
         if name in ("esc", "ctrl-d"):
             return self.finish("hide")
         if name == "ctrl-c":
@@ -1198,6 +1323,8 @@ def main() -> int:
         time.sleep(5)
         return 1
     cfg = Config.from_env()
+    # It may hold the API key and screen contents; keep them out of every child process.
+    os.environ.pop("WEZTERM_COMMANDER_CONFIG", None)
     with Terminal() as term:
         try:
             return Drawer(cfg, term).run()

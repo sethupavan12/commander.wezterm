@@ -17,8 +17,12 @@ local wezterm = require("wezterm")
 
 local M = {}
 
+-- Names of mux domains on other machines (ssh_domains, tls_clients), filled by apply_to_config.
+M.remote_domains = {}
+
 local EVENT_VAR = "wezterm_commander_event"
 local QUIT_SEQUENCE = "\x1b[9999~"
+local MAX_SCREEN_CHARS = 16000
 local is_mac = wezterm.target_triple:find("darwin") ~= nil
 
 M.defaults = {
@@ -127,9 +131,8 @@ local function drawer_target(pane)
 	return drawers()[tostring(pane:pane_id())]
 end
 
--- Like drawer_target, for the hotkey. Pane ids start over when the mux server
--- restarts, so a stale record could name an ordinary shell; check it runs Python.
--- (Events skip this check: the drawer has usually exited by the time they arrive.)
+-- Like drawer_target, but also checks the pane still runs Python: pane ids start
+-- over when the mux server restarts, so a stale record could name an ordinary shell.
 local function live_drawer_target(pane)
 	local target = drawer_target(pane)
 	local process = target and pane:get_foreground_process_name()
@@ -141,6 +144,20 @@ end
 
 local function forget_drawer(pane)
 	drawers()[tostring(pane:pane_id())] = nil
+end
+
+-- Drop records of drawers whose panes no longer exist (closed by hand, mux restarted, ...).
+local function purge_drawers()
+	local registry = drawers()
+	local stale = {}
+	for id in pairs(registry) do
+		if not get_pane(id) then
+			table.insert(stale, id)
+		end
+	end
+	for _, id in ipairs(stale) do
+		registry[id] = nil
+	end
 end
 
 local function find_drawer(tab)
@@ -167,7 +184,8 @@ local function open_drawer(window, pane, opts)
 
 	local screen = nil
 	if opts.screen_context_lines > 0 then
-		screen = pane:get_lines_as_text(opts.screen_context_lines)
+		-- Capped here too: it travels in an environment variable, and Linux limits those to 128 KiB.
+		screen = pane:get_lines_as_text(opts.screen_context_lines):sub(-MAX_SCREEN_CHARS)
 	end
 	local cwd = cwd_of(pane)
 
@@ -226,6 +244,7 @@ function M.toggle(window, pane, opts)
 		return
 	end
 
+	purge_drawers()
 	local drawer, drawer_for = find_drawer(pane:tab())
 	if drawer and drawer_for == pane:pane_id() then
 		drawer:activate()
@@ -234,11 +253,29 @@ function M.toggle(window, pane, opts)
 	if drawer then
 		close_drawer(drawer)
 	end
+	local domain = pane:get_domain_name()
+	if M.remote_domains[domain] or domain:find("^SSH") then
+		window:toast_notification(
+			"commander",
+			"Can't open here: this pane lives on " .. domain .. ", and the drawer needs to run on this machine.",
+			nil,
+			5000
+		)
+		return
+	end
 	open_drawer(window, pane, opts)
 end
 
+local function copy(window, text, why)
+	if window then
+		window:copy_to_clipboard(text)
+		window:toast_notification("commander", why, nil, 4000)
+	end
+end
+
 local function on_event(window, pane, value)
-	local target_id = drawer_target(pane)
+	-- The drawer stays alive until it gets QUIT_SEQUENCE back, so it is still running Python here.
+	local target_id = live_drawer_target(pane)
 	if not target_id then
 		return -- not a drawer we spawned: ignore, whatever it claims
 	end
@@ -246,20 +283,23 @@ local function on_event(window, pane, value)
 	if not ok or type(event) ~= "table" then
 		return
 	end
-	forget_drawer(pane) -- the drawer exits right after sending an event
+	forget_drawer(pane)
 	local target = get_pane(target_id)
 	local text = type(event.text) == "string"
 			and event.text:gsub("[%c]", function(c)
 				return (c == "\n" or c == "\t") and c or ""
 			end)
 		or ""
-	if event.action == "insert" and text ~= "" then
-		if target then
-			-- A paste, so shells with bracketed paste never run it, even if it spans lines.
+	if text ~= "" and event.action == "copy" then
+		copy(window, text, "Multi-line command copied. Paste it where you want it.")
+	elseif text ~= "" and event.action == "insert" then
+		if text:find("\n") then
+			-- A shell without bracketed paste would run each line as it arrives. Never paste newlines.
+			copy(window, text, "Multi-line command copied instead of pasted.")
+		elseif target then
 			target:send_paste(text)
-		elseif window then
-			window:copy_to_clipboard(text)
-			window:toast_notification("commander", "That pane is gone, so the command was copied instead.", nil, 4000)
+		else
+			copy(window, text, "That pane is gone, so the command was copied instead.")
 		end
 	end
 	if target then
@@ -296,6 +336,13 @@ function M.apply_to_config(config, opts)
 	local merged = merge(opts)
 	M.options = merged
 	register_handler()
+	for _, list in ipairs({ config.ssh_domains or {}, config.tls_clients or {} }) do
+		for _, domain in ipairs(list) do
+			if domain.name then
+				M.remote_domains[domain.name] = true
+			end
+		end
+	end
 
 	if merged.key then
 		config.keys = config.keys or {}

@@ -7,9 +7,9 @@ Thanks for wanting to help. Bug reports, fixes and small focused features are al
 These keep the plugin installable with one line, so please hold to them:
 
 - `plugin/commander.py` uses the Python standard library only and must run on Python 3.8. macOS ships 3.9 as `/usr/bin/python3`, and that's the floor most people hit.
-- `plugin/init.lua` only uses WezTerm APIs available since 20230712, the first release with plugin support.
+- `plugin/init.lua` only uses WezTerm APIs available since 20230320, the first release with plugin support.
 - Nothing is downloaded or compiled at install time.
-- Model output is untrusted. Anything that reaches the terminal goes through `sanitize()`, and the Lua side only acts on events from drawer panes it spawned.
+- Model output is untrusted. Anything that reaches the terminal goes through `sanitize()`, the Lua side only acts on events from drawer panes it spawned, and nothing containing a newline is ever pasted.
 
 ## Setup
 
@@ -34,8 +34,9 @@ To work without spending API credits, point `base_url` at a local server such as
 
 ```sh
 python3 -m unittest discover -s tests
+luajit tests/test_init.lua                  # or lua5.1 / lua5.4
 uvx ruff check plugin tests && uvx ruff format --check plugin tests
-npx @johnnymorganz/stylua-bin --check plugin
+npx @johnnymorganz/stylua-bin --check plugin tests
 ```
 
 CI runs the same checks on Linux and macOS, on the oldest and newest supported Python.
