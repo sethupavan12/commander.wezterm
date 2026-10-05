@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-22.04, python: "3.8" }  # newer runner images no longer ship 3.8
-          - { os: ubuntu-latest, python: "3.13" }
+          - { os: ubuntu-24.04, python: "3.13" }
           - { os: macos-latest, python: "3.9" }  # the version /usr/bin/python3 ships on macOS
           - { os: macos-latest, python: "3.13" }
     runs-on: ${{ matrix.os }}
@@ -27,14 +27,14 @@ jobs:
       - run: python -m unittest discover -s tests -v
 
   lua:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sudo apt-get install -y --no-install-recommends luajit
       - run: luajit tests/test_init.lua
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
