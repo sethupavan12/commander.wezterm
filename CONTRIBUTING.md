@@ -35,7 +35,7 @@ To work without spending API credits, point `base_url` at a local server such as
 ```sh
 python3 -m unittest discover -s tests
 luajit tests/test_init.lua                  # or lua5.1 / lua5.4
-uvx ruff check plugin tests && uvx ruff format --check plugin tests
+uvx ruff check plugin tests scripts && uvx ruff format --check plugin tests scripts
 npx @johnnymorganz/stylua-bin --check plugin tests
 ```
 
