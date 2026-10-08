@@ -17,16 +17,24 @@
 
 ## Install
 
-Add this to `~/.wezterm.lua`, after `config` is created:
+**1. Add the plugin to `~/.wezterm.lua`.** Put these two lines just above the `return config` line at the bottom of the file:
 
 ```lua
 local commander = wezterm.plugin.require("https://github.com/sethupavan12/commander.wezterm")
 commander.apply_to_config(config)
 ```
 
-Export `OPENAI_API_KEY` in your shell profile, then press `Cmd+I` (`Ctrl+Shift+I` on Linux).
+**2. Give it your OpenAI API key.** Add this line to the file your shell reads at startup, with your own key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys):
 
-Needs WezTerm 20230320 or newer and Python 3.8+ on macOS or Linux. On a Mac, that's Homebrew's Python or the one from `xcode-select --install`.
+```sh
+export OPENAI_API_KEY="sk-..."
+```
+
+That file is `~/.zshrc` if you use zsh (the default on macOS) or `~/.bashrc` for bash. On fish, add `set -gx OPENAI_API_KEY "sk-..."` to `~/.config/fish/config.fish` instead. No restart needed: the plugin reads the key from there each time it opens.
+
+**3. Press `Cmd+I`** (`Ctrl+Shift+I` on Linux) in any WezTerm pane.
+
+You'll need WezTerm 20230320 or newer and Python 3.8+ on macOS or Linux. On a Mac, that's Homebrew's Python or the one from `xcode-select --install`. Using Ollama or another provider instead of OpenAI? See [Run it offline](#run-it-offline).
 
 ## Use it
 
